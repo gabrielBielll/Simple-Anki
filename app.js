@@ -8,12 +8,14 @@
 
     let app, auth, db;
     try {
-        if (Object.keys(firebaseConfig).length > 0) {
+        if (firebaseConfig && firebaseConfig.apiKey && Object.keys(firebaseConfig).length > 0) {
+            console.log("Initializing Firebase with config...");
             app = initializeApp(firebaseConfig);
             auth = getAuth(app);
             db = getFirestore(app);
         } else {
-            console.warn("Firebase config is missing or empty.");
+            console.warn("Firebase config is missing, empty, or lacks apiKey. Skipping Firebase initialization.");
+            console.log("Current config keys:", Object.keys(firebaseConfig));
         }
     } catch (e) {
         console.error("Firebase initialization failed:", e);
