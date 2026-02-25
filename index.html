@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="pt-PT">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Meu Anki B1 - Exportação Avançada</title>
+
+  <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <div id="app" class="container" v-cloak>
+    <h1>📚 Meu Anki B1</h1>
+    <div class="cloud-status">
+      <span v-if="isLoading">☁️ A sincronizar...</span>
+      <span v-else>☁️ Sincronizado</span>
+    </div>
+
+    <div v-if="isLoading" class="loading-container">
+      <div class="spinner"></div>
+      <p>A carregar dados...</p>
+    </div>
+
+    <div v-else>
+      <!-- NAVEGAÇÃO -->
+      <nav class="nav-tabs">
+        <button :class="{ active: tabAtual === 'estudar' }" @click="mudarAba('estudar')">
+          🧠 Estudar <span v-if="totalParaRevisar > 0" class="badge-estudo">{{ totalParaRevisar }}</span>
+        </button>
+        <button :class="{ active: tabAtual === 'adicionar' }" @click="mudarAba('adicionar')">➕ Adicionar</button>
+        <button :class="{ active: tabAtual === 'lista' }" @click="mudarAba('lista')">📋 Cartões</button>
+        <button :class="{ active: tabAtual === 'dados' }" @click="mudarAba('dados')">⚙️ Ajustes</button>
+      </nav>
+
+      <!-- ABA 0: ESTUDAR -->
+      <div v-if="tabAtual === 'estudar'">
+        <div v-if="!grupoSelecionadoId">
+          <h2 style="font-size: 18px; margin-bottom: 15px;">Escolha um grupo para estudar:</h2>
+          <div v-for="grupo in gruposResumo" :key="grupo.id" class="group-selector-item panel" style="cursor: pointer;" @click="selecionarGrupo(grupo.id)">
+            <div class="group-info">
+              <h4>📁 {{ grupo.name }}</h4>
+              <p style="font-size: 12px; color: var(--text-light);">{{ grupo.totalCards }} cartões</p>
+            </div>
+            <div class="group-count" :class="{ zero: grupo.dueCount === 0 }">{{ grupo.dueCount }}</div>
+          </div>
+        </div>
+
+        <div v-else>
+          <button class="btn-back" @click="grupoSelecionadoId = null">⬅️ Voltar para Grupos</button>
+          <div v-if="cartoesParaRevisar.length === 0" class="panel" style="text-align: center; padding: 40px 20px;">
+            <h2 style="font-size: 24px; margin-bottom: 10px;">🎉 Terminou!</h2>
+            <button @click="grupoSelecionadoId = null" class="btn-primary" style="margin-top: 20px;">Escolher outro grupo</button>
+          </div>
+          <div v-else class="panel study-card">
+            <span class="badge" style="margin-bottom: 15px;">{{ getNomeGrupo(cartaoAtual.groupId) }}</span>
+            <div class="study-front">{{ cartaoAtual.front }}</div>
+            <div v-if="mostrandoResposta" style="width: 100%;">
+              <div class="study-divider"></div>
+              <div class="study-back">{{ cartaoAtual.back }}</div>
+              <div v-if="cartaoAtual.contextSentences && cartaoAtual.contextSentences[0]" style="text-align: left; background: #F9FAFB; padding: 12px; border-radius: 8px; font-size: 14px; color: #4B5563;">
+                <ul style="margin-left: 20px;"><li>{{ cartaoAtual.contextSentences[0] }}</li></ul>
+              </div>
+              <div class="feedback-grid">
+                <button class="btn-feedback bg-errei" @click="responderCartao(1)">Errei</button>
+                <button class="btn-feedback bg-dificil" @click="responderCartao(2)">Difícil</button>
+                <button class="btn-feedback bg-bom" @click="responderCartao(3)">Bom</button>
+                <button class="btn-feedback bg-facil" @click="responderCartao(4)">Fácil</button>
+              </div>
+            </div>
+            <button v-else class="btn-reveal" @click="mostrandoResposta = true">Revelar Resposta</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ABA 1: ADICIONAR -->
+      <div v-if="tabAtual === 'adicionar'" class="panel">
+        <form @submit.prevent="salvarCartao">
+          <div class="form-group">
+            <label>Grupo / Deck</label>
+            <select v-model="novoCartao.groupId" required><option v-for="grupo in grupos" :key="grupo.id" :value="grupo.id">{{ grupo.name }}</option></select>
+          </div>
+          <div class="form-group">
+            <label>Palavra / Expressão (Inglês)</label>
+            <input type="text" v-model="novoCartao.front" @blur="buscarDadosDaPalavra" placeholder="Ex: To figure out..." required autocomplete="off" />
+            <span v-if="isFetchingDef" class="fetch-indicator">🔍</span>
+          </div>
+          <div class="form-group">
+            <label>Definição / Tradução</label>
+            <input type="text" v-model="novoCartao.back" required autocomplete="off" />
+          </div>
+          <div class="form-group">
+            <label>Exemplo (Contexto)</label>
+            <input type="text" v-model="novoCartao.sentences[0]" placeholder="Frase de exemplo..." />
+          </div>
+          <button type="submit" class="btn-primary" :disabled="isSaving">Guardar na Nuvem</button>
+        </form>
+      </div>
+
+      <!-- ABA 2: LISTA -->
+      <div v-if="tabAtual === 'lista'">
+        <div v-for="cartao in cartoes" :key="cartao.id" class="card-item panel">
+          <div style="display: flex; justify-content: space-between;">
+            <span class="badge">{{ getNomeGrupo(cartao.groupId) }}</span>
+            <button @click="deletarCartao(cartao.id)" class="btn-danger">Eliminar</button>
+          </div>
+          <h3 style="color: var(--primary); margin-top: 10px;">{{ cartao.front }}</h3>
+          <p>{{ cartao.back }}</p>
+        </div>
+      </div>
+
+      <!-- ABA 3: AJUSTES & DADOS -->
+      <div v-if="tabAtual === 'dados'" class="panel">
+        <h2 style="font-size: 18px;">Meus Grupos</h2>
+        <div class="input-group">
+            <input type="text" v-model="novoGrupoNome" placeholder="Novo grupo..." @keyup.enter="adicionarGrupo" />
+            <button @click="adicionarGrupo" class="btn-primary">Criar</button>
+        </div>
+
+        <div style="margin-top: 20px;">
+          <div v-for="grupo in gruposResumo" :key="grupo.id" class="group-selector-item" style="padding: 10px; border-bottom: 1px solid var(--border); border-radius: 0; margin-bottom: 0;">
+            <div class="group-info">
+                <strong>{{ grupo.name }}</strong>
+                <p style="font-size: 11px; color: var(--text-light);">{{ grupo.totalCards }} cartões</p>
+            </div>
+            <div class="group-actions">
+                <button class="btn-small json" @click="exportarFicheiro('json', grupo.id)" title="Exportar JSON">JSON</button>
+                <button class="btn-small csv" @click="exportarFicheiro('csv', grupo.id)" title="Exportar CSV">CSV</button>
+            </div>
+          </div>
+        </div>
+
+        <hr style="margin: 30px 0; border-top: 1px solid var(--border);">
+        <h2 style="font-size: 18px; margin-bottom: 15px;">Operações Globais</h2>
+
+        <div style="display: flex; flex-direction: column; gap: 10px;">
+          <label class="btn-primary-label" style="background: #D97706;">
+            <span v-if="isImporting">⏳ Importando...</span>
+            <span v-else>📥 Importar DuoCards (.csv)</span>
+            <input type="file" accept=".csv" @change="importarDuoCards" style="display: none;" />
+          </label>
+
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+            <button @click="exportarFicheiro('json')" class="btn-primary" style="background: #10B981; font-size: 14px;">📤 Tudo (JSON)</button>
+            <button @click="exportarFicheiro('csv')" class="btn-primary" style="background: #059669; font-size: 14px;">📤 Tudo (CSV)</button>
+          </div>
+        </div>
+        <p v-if="importMsg" style="margin-top: 10px; font-size: 12px; color: var(--info); text-align: center;">{{ importMsg }}</p>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
