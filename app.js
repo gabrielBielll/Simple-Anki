@@ -6,9 +6,19 @@
     const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
     const initToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
-    const app = initializeApp(firebaseConfig);
-    const auth = getAuth(app);
-    const db = getFirestore(app);
+    let app, auth, db;
+    try {
+        if (Object.keys(firebaseConfig).length > 0) {
+            app = initializeApp(firebaseConfig);
+            auth = getAuth(app);
+            db = getFirestore(app);
+        } else {
+            console.warn("Firebase config is missing or empty.");
+        }
+    } catch (e) {
+        console.error("Firebase initialization failed:", e);
+    }
+
     const { createApp, ref, reactive, onMounted, computed } = window.Vue;
     const gerarId = () => Date.now().toString(36) + Math.random().toString(36).substring(2);
 
@@ -97,31 +107,36 @@
         // --- IMPORTAÇÃO DUOCARDS ---
         const importarDuoCards = async (event) => {
           const file = event.target.files[0];
-          if (!file || !currentUser.value) return;
+          if (!file || !currentUser.value || !db) return;
           isImporting.value = true;
           importMsg.value = "Lendo CSV...";
           const reader = new FileReader();
           reader.onload = async (e) => {
             const rows = parseCSV(e.target.result).slice(1);
             const idGrupo = gerarId();
-            await setDoc(doc(db, 'artifacts', appId, 'users', currentUser.value.uid, 'grupos', idGrupo), {
-              name: `Importado ${new Date().toLocaleDateString()}`,
-              createdAt: new Date().toISOString()
-            });
-            for (const row of rows) {
-              if (row.length >= 2 && row[0].trim() !== '') {
-                const card = {
-                  groupId: idGrupo,
-                  front: row[0].trim(),
-                  back: row[1].trim(),
-                  contextSentences: [row[2]?.trim() || ''],
-                  srsData: { easeFactor: 2.5, interval: 0, repetitions: 0, nextReviewDate: new Date().toISOString() },
-                  metadata: { source: 'duocards_import', tags: [] }
-                };
-                await setDoc(doc(db, 'artifacts', appId, 'users', currentUser.value.uid, 'cartoes', gerarId()), card);
-              }
+            try {
+                await setDoc(doc(db, 'artifacts', appId, 'users', currentUser.value.uid, 'grupos', idGrupo), {
+                  name: `Importado ${new Date().toLocaleDateString()}`,
+                  createdAt: new Date().toISOString()
+                });
+                for (const row of rows) {
+                  if (row.length >= 2 && row[0].trim() !== '') {
+                    const card = {
+                      groupId: idGrupo,
+                      front: row[0].trim(),
+                      back: row[1].trim(),
+                      contextSentences: [row[2]?.trim() || ''],
+                      srsData: { easeFactor: 2.5, interval: 0, repetitions: 0, nextReviewDate: new Date().toISOString() },
+                      metadata: { source: 'duocards_import', tags: [] }
+                    };
+                    await setDoc(doc(db, 'artifacts', appId, 'users', currentUser.value.uid, 'cartoes', gerarId()), card);
+                  }
+                }
+                importMsg.value = `Importado!`;
+            } catch (err) {
+                console.error("Import error:", err);
+                importMsg.value = "Erro ao importar.";
             }
-            importMsg.value = `Importado!`;
             isImporting.value = false;
           };
           reader.readAsText(file);
@@ -163,6 +178,7 @@
         };
 
         const carregarDados = (uid) => {
+          if (!db) return;
           onSnapshot(collection(db, 'artifacts', appId, 'users', uid, 'grupos'), (snap) => {
             grupos.value = snap.docs.map(d => ({ id: d.id, ...d.data() }));
             if (grupos.value.length === 0) {
@@ -188,6 +204,7 @@
         };
 
         const responderCartao = async (q) => {
+          if (!db || !currentUser.value) return;
           isSaving.value = true;
           let c = { ...cartaoAtual.value };
           let s = { ...c.srsData };
@@ -206,6 +223,7 @@
         };
 
         const salvarCartao = async () => {
+          if (!db || !currentUser.value) { alert("Configuração de banco de dados ausente."); return; }
           isSaving.value = true;
           const c = { groupId: novoCartao.groupId, front: novoCartao.front, back: novoCartao.back, contextSentences: [...novoCartao.sentences], srsData: { easeFactor: 2.5, interval: 0, repetitions: 0, nextReviewDate: new Date().toISOString() }, metadata: { source: 'manual', tags: [] } };
           await setDoc(doc(db, 'artifacts', appId, 'users', currentUser.value.uid, 'cartoes', gerarId()), c);
@@ -214,20 +232,37 @@
         };
 
         const adicionarGrupo = async () => {
+          if (!db || !currentUser.value) { alert("Configuração de banco de dados ausente."); return; }
           if(!novoGrupoNome.value) return;
           await setDoc(doc(db, 'artifacts', appId, 'users', currentUser.value.uid, 'grupos', gerarId()), { name: novoGrupoNome.value, createdAt: new Date().toISOString() });
           novoGrupoNome.value = '';
         };
 
-        const deletarCartao = async (id) => { if(confirm('Eliminar?')) await deleteDoc(doc(db, 'artifacts', appId, 'users', currentUser.value.uid, 'cartoes', id)); };
+        const deletarCartao = async (id) => {
+            if (!db || !currentUser.value) return;
+            if(confirm('Eliminar?')) await deleteDoc(doc(db, 'artifacts', appId, 'users', currentUser.value.uid, 'cartoes', id));
+        };
         const mudarAba = (aba) => { tabAtual.value = aba; grupoSelecionadoId.value = null; mostrandoResposta.value = false; };
         const selecionarGrupo = (id) => { grupoSelecionadoId.value = id; mostrandoResposta.value = false; };
         const getNomeGrupo = (id) => grupos.value.find(g => g.id === id)?.name || 'Geral';
 
         onMounted(() => {
-          const initNuvem = async () => { if (initToken) await signInWithCustomToken(auth, initToken); else await signInAnonymously(auth); };
-          initNuvem();
-          onAuthStateChanged(auth, u => { currentUser.value = u; if(u) carregarDados(u.uid); else isLoading.value = false; });
+          if (auth) {
+              const initNuvem = async () => {
+                  try {
+                    if (initToken) await signInWithCustomToken(auth, initToken);
+                    else await signInAnonymously(auth);
+                  } catch (e) {
+                      console.error("Auth error:", e);
+                      isLoading.value = false;
+                  }
+              };
+              initNuvem();
+              onAuthStateChanged(auth, u => { currentUser.value = u; if(u) carregarDados(u.uid); else isLoading.value = false; });
+          } else {
+              console.warn("Auth not initialized.");
+              isLoading.value = false;
+          }
         });
 
         return {
